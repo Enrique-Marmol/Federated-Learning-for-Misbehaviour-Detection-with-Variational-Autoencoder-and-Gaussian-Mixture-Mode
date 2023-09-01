@@ -24,7 +24,7 @@ learn = 0.005
 epochs = 1
 alpha = 1
 
-nc = 298
+nc = 276
 cvt = "diag"
 
 def set_epochs(ep):
@@ -97,8 +97,8 @@ def preprocess(training_data):
 def leer_cliente_veremi(client_n):
     dir_base = os.getcwd()
     #dir_tam = "Coches_300-275.csv"
-    dir_tam = "vehiculos_298.csv"
-    #dir_tam = "vehiculos_"+str(nc)+".csv"
+    #dir_tam = "vehiculos_298.csv"
+    dir_tam = "vehiculos_"+str(nc)+".csv"
     dir_lista_tam = os.path.join(dir_base, dir_tam)
     dir_lista_tam = os.path.abspath(dir_lista_tam)
 
@@ -112,8 +112,68 @@ def leer_cliente_veremi(client_n):
     return dir_lista_datos
 
 
+def leer_cliente_veremi_ex(client_n):
+    dir_base = os.getcwd()
+    #dir_tam = "Coches_300-275.csv"
+    #dir_tam = "vehiculos_298.csv"
+    dir_tam = "Veremi_extension/vehiculos_ex_"+str(nc)+".csv"
+    dir_lista_tam = os.path.join(dir_base, dir_tam)
+    dir_lista_tam = os.path.abspath(dir_lista_tam)
+
+    lista_clientes = pd.read_csv(dir_lista_tam)
+    lista_clientes = np.array(lista_clientes['Vehicle'])
+    lc_ind = client_n - 1
+    dir_datos = "Veremi_extension/data_party" + str(int(lista_clientes[lc_ind])) + ".csv"
+    # dir_datos = "originales/data_party" + str(lista_clientes[lc_ind]) + ".csv"
+    dir_lista_datos = os.path.join(dir_base, dir_datos)
+    dir_lista_datos = os.path.abspath(dir_lista_datos)
+    return dir_lista_datos
+
+
+
 
 def create_histogram_veremi(Normal, A, n_clusters, cv_type):
+    useless = ['Label']
+
+
+    Normal.drop(useless, axis=1, inplace=True)
+    A.drop(useless, axis=1, inplace=True)
+
+    Normal_ = pd.DataFrame(Normal.iloc[:, :], columns=Normal.columns[:])
+    A_ = pd.DataFrame(A.iloc[:, :], columns=A.columns[:])
+
+    Normal_.sample(frac=1).reset_index(drop=True)
+    A_.sample(frac=1).reset_index(drop=True)
+
+    nl = len(Normal_)
+    nl = int(0.8 * nl)
+    Normal_test = Normal_.iloc[nl:, :].reset_index(drop=True)
+    A_test = A_.reset_index(drop=True)
+
+    Normal_test["target"] = 0
+    A_test["target"] = 1
+
+    Normal_train = Normal_.iloc[:nl, :].reset_index(drop=True)
+
+    ini = time.time()
+    gmm = GaussianMixture(n_components=n_clusters, covariance_type=cv_type,init_params="k-means++") #random_state=0, init_params="random_from_data")
+    gmm.fit(Normal_train)
+    fin = time.time()
+    print("Tiempo crear y entrenar GMM: " + str(fin-ini))
+    # print(gmm.means_)
+    desv = Normal_train.std()
+    centers = gmm.means_
+
+    # y se hace el predict del cluster
+    clus = pd.Series(gmm.predict(Normal_train), name='Clusters')
+    cluster_final = pd.concat([Normal_train, clus], axis=1)
+
+    n_inputs_mud = Normal_train.shape[1]
+
+    return Normal_test, A_test, Histo_numpy_2(cluster_final, centers, desv, n_inputs_mud, n_clusters,
+                                              1), desv, centers, gmm
+
+def create_histogram_veremi_extension(Normal, A, n_clusters, cv_type):
     useless = ['Label']
 
 
@@ -221,7 +281,11 @@ def Deteccion(datos, umbral, variables, clusters, NN, centers, desv, gmm, client
     FN = len(M[(M.Prediction == 0) & (M.Target == 1)])
     FP = len(M[(M.Prediction == 1) & (M.Target == 0)])
     TN = len(M[(M.Prediction == 0) & (M.Target == 0)])
-    acc_ae = (TP + TN) / (TP + TN + FP + FN)
+
+    try:
+        acc_ae = (TP + TN) / (TP + TN + FP + FN)
+    except:
+        acc_ae=0
     #print("ACCURACY AUTOENCODER: " + str(acc))
     aux = []
     path = os.getcwd()+"/metricas_autoencoder/acc_ae_client_"+str(client)+".csv"
@@ -276,9 +340,12 @@ def Deteccion(datos, umbral, variables, clusters, NN, centers, desv, gmm, client
 def my_metrics(Normal_test, A_test, variables, UM, n, model, centers, desv, gmm, clusters, client):
     #print("calculando metricas")
     rs = random.randint(0, 42)
-    split = pd.concat([Normal_test.sample(n, random_state=rs).reset_index(drop=True),
-                       A_test.sample(n, random_state=rs).reset_index(drop=True)])
-
+    if len(A_test) >= n:
+        split = pd.concat([Normal_test.sample(n, random_state=rs).reset_index(drop=True),
+                           A_test.sample(n, random_state=rs).reset_index(drop=True)])
+    else:
+        split = pd.concat([Normal_test.sample(n, random_state=rs).reset_index(drop=True),
+                           A_test.sample(len(A_test), random_state=rs).reset_index(drop=True)])
     # FINAL = Deteccion(split, UM, 36, 3, model, centers, desv, gmm)
 
     FINAL, acc_ae, p_ae, acc_gmm, p_gmm = Deteccion(split, UM, variables, clusters, model, centers, desv, gmm,client)
@@ -289,12 +356,25 @@ def my_metrics(Normal_test, A_test, variables, UM, n, model, centers, desv, gmm,
     FP = len(M[(M.Prediction == 1) & (M.Target == 0)])
     TN = len(M[(M.Prediction == 0) & (M.Target == 0)])
 
-    acc = (TP + TN) / (TP + TN + FP + FN)
-    precision = (TP / (TP + FP))
-    recall = TP / (TP + FN)
-    f1_sc = 2 * (recall * precision) / (recall + precision)
+    try:
+        acc = (TP + TN) / (TP + TN + FP + FN)
+    except:
+        acc = 0
+    try:
+        precision = (TP / (TP + FP))
+    except:
+        precision = 0
 
-    mcc = ((TP * TN) - (FP * FN)) / (math.sqrt((TP + FP) * (TP + FN) * (TN + FP) * (TN + FN)))
+    try:
+        recall = TP / (TP + FN)
+    except:
+        recall = 0
+    try:
+        f1_sc = 2 * (recall * precision) / (recall + precision)
+    except:
+        f1_sc = 0
+
+    mcc = 0#((TP * TN) - (FP * FN)) / (math.sqrt((TP + FP) * (TP + FN) * (TN + FP) * (TN + FN)))
 
     return acc, precision, recall, f1_sc, mcc, acc_ae, p_ae, acc_gmm, p_gmm
 
@@ -322,7 +402,7 @@ class tfmlpClient(fl.client.NumPyClient):
         """Train parameters on the locally held training set."""
 
         # Update local model parameters
-        # self.model.set_weights(parameters)
+        self.model.set_weights(parameters)
         mean_weights = parameters
 
         # Get hyperparameters for this round
@@ -337,7 +417,7 @@ class tfmlpClient(fl.client.NumPyClient):
         """
         print("Ronda: " + str(rnd))
         # Train the model using hyperparameters from config
-        if rnd > 1:
+        if rnd > 100:
             for epoch in range(epochs):
                 history = self.model.fit(
                     self.x_train,
@@ -361,15 +441,15 @@ class tfmlpClient(fl.client.NumPyClient):
                 validation_split=0.1,
             )
             new_param = self.model.get_weights()
-
+        new_param = self.model.get_weights()
         parameters_prime = new_param
         num_examples_train = len(self.x_train)
 
 
         Hpred = pd.DataFrame(self.model.predict(self.x_train))
         REC = np.sqrt(np.sum((self.x_train - Hpred) ** 2, axis=1))
-        #UM = np.mean(REC) + 0.01 * np.std(REC)
-        UM = np.quantile(REC, 0.95)
+        UM = np.mean(REC) + 0.01 * np.std(REC)
+        #UM = np.quantile(REC, 0.95)
         n = int(len(self.x_test))
 
         accuracy, recall, precision, f1_sc, mcc, acc_ae, p_ae, acc_gmm, p_gmm = my_metrics(self.x_test, self.y_test, self.n_inputs_mud, UM, n, self.model,
@@ -548,6 +628,7 @@ def start_client(client_n):
 
 def start_client_vae(client_n, lr):
     dir_base = os.getcwd()
+    #cliente = leer_cliente_veremi_ex(client_n)
     cliente = leer_cliente_veremi(client_n)
     print(cliente)
     dataset = pd.read_csv(cliente)
@@ -605,7 +686,7 @@ def start_client_vae(client_n, lr):
     """
     n_component = nc  # 244
     cv_type = cvt
-    Normal_t, A_t, hist, desv, centers, gmm = create_histogram_veremi(Normal, A, n_component, cv_type)
+    Normal_t, A_t, hist, desv, centers, gmm = create_histogram_veremi_extension(Normal, A, n_component, cv_type)
     n_inputs = hist.shape[1]
     n_inputs_mud = Normal.shape[1]
 
@@ -782,7 +863,7 @@ def start_server_vae(parties, rounds, epoch, alph, lr):
     """
     n_component = nc  # 244
     cv_type = cvt
-    Normal_t, A_t, hist, desv, centers, gmm = create_histogram_veremi(Normal, A, n_component, cv_type)
+    Normal_t, A_t, hist, desv, centers, gmm = create_histogram_veremi_extension(Normal, A, n_component, cv_type)
     n_inputs = hist.shape[1]
 
     def get_error_term(v1, v2, _rmse=True):
@@ -922,6 +1003,25 @@ def get_error_term(v1, v2, _rmse=True):
 
 
 
+"""from scipy.stats import shapiro
+    results = []
+    contador = 0
+    for column in Normal_train.columns:
+        stat, p_value = shapiro(Normal_train[column])
+        results.append((column, stat, p_value))
 
+    # Print the results
+    for column, stat, p_value in results:
+        print(f"Feature: {column}")
+        print(f"   Shapiro-Wilk statistic: {stat:.4f}")
+        print(f"   p-value: {p_value:.4f}")
+        if p_value < 0.05:
+            print("   The feature does not follow a Gaussian distribution.")
+        else:
+            print("   The feature follows a Gaussian distribution.")
+            contador = contador+1
+        print()
+
+    print(contador)"""
 
 
